@@ -1,0 +1,372 @@
+---
+title: "COVID 19 Project"
+author: "Michael Norton"
+date: "2023-03-05"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## COVID 19 Death and Incident Analysis based on Johns Hopkins COVID 19 data
+Lists of US and Global COVID 19 Incidents and Deaths from Time Series
+
+The source data  contains daily time series summary tables, including confirmed, deaths and recovered. All data is read in from the daily case report. 
+
+Two time series tables are for the US confirmed cases and deaths, reported at the county level. They are named time_series_covid19_confirmed_US.csv, time_series_covid19_deaths_US.csv, respectively.
+
+Two  series tables are for the global confirmed cases and deaths. Australia, Canada and China are reported at the province/state level. Dependencies of the Netherlands, the UK, France and Denmark are listed under the province/state level. The US and other countries are at the country level. The tables are renamed time_series_covid19_confirmed_global.csv and time_series_covid19_deaths_global.csv.
+
+##  Data Dictionary  
+Column Name   | Column Description
+------------- | -------------
+Admin2        | County or Administrative District
+Province/State| Province or State
+Country/Region| Country or Other Regional District
+Combined_Key  | Province or State AND County or Administrative District
+date          | Date Case and Death Occured
+cases         | Count of reported cases of COVID 19
+deaths        | Count of reported deaths from COVID 19
+UID           | Uhnique Identifier
+
+
+###  Loading Librarys
+I am using both tidyverse and lubridate
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+
+##Import Data
+1.  import up to date files from the target urls into an object in two steps.  first, create an object with the common url segment, then upload each of the 4 source csv url segments into a concatenated file,  the merge them,
+
+2.  Read each of the csv files into a datafreame. 
+
+2.  view the data using glimpse and head to print lead rows of the table
+
+##  Data Dictionary from the NYPD site 
+Column Name   | Column Description
+------------- | -------------
+Admin2        | County or Administrative District
+Province/State| Province or State
+Country/Region| Country or Other Regional District
+Combined_Key  | Province or State AND County or Administrative District
+date          | Date Case and Death Occured
+cases         | Count of reported cases of COVID 19
+deaths        | Count of reported deaths from COVID 19
+UID           | Uhnique Identifier
+
+ 
+#### Importing the data from the source
+```{r}    
+url_input <- "https://github.com/CSSEGISandData/COVID-19/raw/master/csse_covid_19_data/csse_covid_19_time_series/"
+files_from_url <- c("time_series_covid19_confirmed_US.csv", "time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_US.csv", "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_input, files_from_url)
+```
+
+```{r}
+confirmed_US <- read_csv(urls[1])   #reading the cvs files into dataframes
+confirmed_global <- read_csv(urls[2])
+deaths_US <- read_csv(urls[3])
+deaths_global <- read_csv(urls[4])
+```
+
+##  Wrangle the data into useful dataframes  
+
+Here I am pivoting the data to make each date a row instead of a column with the attributes present for each row e,g  country, state, cases, deaths etc.
+
+Also Joining the tables so that both cases and deaths are in the same dataframe
+
+
+This will result in dataframes for US COvid activity and Global US Covid activity by date fpr all reporting entitites, county, state and country
+
+DUring the wrangling, I am removing irrelevant columns,  renaming columns to standardize (e.g. get rid of slashes), checking for and treating null values, converting date fields,  modifying to factors where I think I may use a value in my model.
+
+I am also engineering new features like deaths per million and cases per million.
+
+Although I am not including them in my knit,  I often execute summary, head, tail and glimps functions to assess my dataframes.
+
+```{r}
+us_cases <- confirmed_US %>% 
+  pivot_longer(cols = -(UID:Combined_Key),  #pivoting the data
+    names_to = "date",
+    values_to = "cases")%>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%    # converting the date field
+  select(-c(Lat, Long_))          # removing irrelevant columns
+```
+
+```{r}
+us_deaths <- deaths_US %>% 
+  pivot_longer(cols = -(UID:Population), 
+    names_to = "date",
+    values_to = "cases")%>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+```
+
+```{r}
+US <- us_cases %>% 
+  full_join(us_deaths)   # joining us cases and deaths into a single dataframe
+
+```
+
+```{r}
+deaths_global <- deaths_global %>% 
+  pivot_longer(cols = -c("Province/State", "Country/Region", Lat, Long), 
+    names_to = "date",
+    values_to = "deaths") %>%
+  select(-c(Lat, Long))
+```
+
+```{r}
+confirmed_global <- confirmed_global %>% 
+  pivot_longer(cols = -c("Province/State", "Country/Region", Lat, Long), 
+    names_to = "date",
+    values_to = "cases") %>%
+  select(-c(Lat, Long))
+```
+
+
+```{r}
+global <- confirmed_global %>% 
+  full_join(deaths_global) %>%
+  rename(Country_Region = "Country/Region",
+         Province_State = "Province/State") %>%
+  mutate(date = mdy(date))
+  
+ 
+```
+
+summary(global)
+
+```{r}
+global <- global %>% filter(cases > 0)   # filtering out rows with no cases
+```
+   
+### Adding population to the global dataframe
+Here I am grabbing another file from the source that has population data so that the global file has population data and joining it with the global dataframe
+```{r}
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+```
+
+```{r}
+Lookup_url<- "https://github.com/CSSEGISandData/COVID-19/raw/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+```
+```{r}
+Lookup <- read_csv(Lookup_url)
+```
+
+
+```{r}
+global <- global %>%
+  left_join(Lookup, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population)
+```
+
+###  Grouping global data 
+by country region and date and then summing the data so we have a dataframe with inque daily reporting for every country.  Also adding a deaths per million attribute that may come in handy.
+
+
+
+
+
+World_By_Country <- global %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths_global), Population = sum(Population)) %>%
+  mutate(deaths_per_million = deaths_global * 1000000/Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population) %>%
+  ungroup()
+
+## Analysis and Visualizations
+Here I am goping to look more deeply into the COVID activity in our neighboring nation of Canada.  I would like to see how the COVID cases grew in Canada and also explore whether it was experienced differently in an urban province and in a rural province.
+
+###  Filter Canada Data from global Data
+Below  I am filtering the Canada data from teh global data and removing any rows where I cannot identify the Province.
+
+I am then grouping by Province and State as well as date so each day has a unique and summed up case adn death total for each province.  I am going to do slices for Canada as a whole, another summary for all of Canada by provinces and then a summary for the most urban province , Ontario and one of the rural Maritime provinces, Prince Edwards Island.
+                   
+```{r}
+Canada <- global %>%
+  filter(Country_Region == "Canada") %>%   # filtering to only Canada
+  filter(Province_State != "NA")           # removing Province Rows with no cases
+```  
+### Summing at the province level with new attribute Deaths per Million
+```{r}
+Canadian_Provinces <- Canada %>%
+  group_by(Country_Region, Province_State, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000/Population) %>%
+  select(Country_Region, Province_State, date, cases, deaths, Population) %>%
+  ungroup()
+  
+  
+```
+### Summing for all of Canada with new attribute Deaths per Million
+
+```{r}
+Canada_Summary <- Canadian_Provinces  %>%
+   group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000/Population) %>%
+  select(date, cases, deaths, Population, deaths_per_mil) %>%
+  ungroup()
+```
+
+### One additional summary with an additional attribute cases per million for a model later
+```{r}
+Provincial_Summary <- Canadian_Provinces  %>%
+  group_by(Province_State, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000/Population) %>%
+  mutate(cases_per_mil = cases * 1000000/Population) %>%
+  select(date, cases, deaths, Population, deaths_per_mil, Province_State, cases_per_mil) %>%
+  ungroup()
+```
+
+
+### Summing for just Ontario and below that for Prince Edward Island
+These will support visualizations
+
+```{r}
+Ontario_Summary <- Canadian_Provinces  %>%
+  filter(Province_State == "Ontario") %>%
+  group_by(Province_State, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000/Population) %>%
+  select(date, cases, deaths, Population) %>%
+  ungroup()
+```
+```{r}
+Prince_Edward_Island_Summary <- Canadian_Provinces  %>%
+  filter(Province_State == "Prince Edward Island") %>%
+  group_by(Province_State, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mil = deaths * 1000000/Population) %>%
+  select(date, cases, deaths, Population) %>%
+  ungroup()
+```
+
+## Visualizations
+Here we will look at a comparison of the COVID case rate and Death rate.  The plot will show the growth over time and the differences between case adn death rates
+
+
+
+```{r}
+Canada_Summary %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Canadian COVID19",  y = NULL)
+```
+##  CANADA COVID ACTIVITY
+Here we see a small lag in deaths as covid cases started but then we see a dramatic spike in early 2020 in both cases and deaths nationwide.  In the late spring 2020  both cases and death rates quickly bend and flatting out.   Keep in mind that the lines show cunulative cases and deaths and that this scale is logarithmic for ease of viewing the large numbers.  
+
+
+
+Let's look at a populous province and then at a rural province
+
+```{r}
+Ontario_Summary %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Ontario COVID19",  y = NULL)
+```
+## ONTARIO ACTIVITY
+
+The Ontario plot looks very similar to the Canada  Plot.  Ontario has the most urban population with Toronto, Hamilton, Windsor and other metropolitan areas. 
+
+```{r}
+Prince_Edward_Island_Summary %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position ="bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Prince Edward Island COVID19",  y = NULL)
+```
+
+## PRINCE EDWARD ISLAND ACTIVITY
+
+The PEI plot looks very different than both the  Canada and Ontario data.  This is a rural Maritime Province in the Far East of Canada.  We do see a small spike in 2020 in cases but the deaths are practically non-existent until 2022, two years into the pandemic.  Even though total cases are low,  one might still expect a proportionate death rate.  Now in 2022, We see a spike in both cases and deaths. What changed????  Mobility.  Prince Edward Island is a tourist destination of sorts and there is a great possibility that the lifting of a sibstantial lockdown had its effect.
+
+##  Create Models
+
+Two questions to be asked.  Can I predict the deaths per million based on the province and can i predict the deaths per million based on cases per million.
+First I need to change the Province into a dactor or categorical to use in the model as an independant variable.  Behind the scene models will then one hot encode the Provinces into a binary value so they can be modeled.
+
+```{r}
+Canadian_Provinces$Province_State  <- as.factor(Provincial_Summary$Province_State)
+```
+
+```{r}
+model_1 <- lm(deaths_per_mil ~ cases_per_mil, data = Provincial_Summary )
+summary(model_1)
+```
+Model Analysis
+
+THe cases per million can dfefinitely help predict the deaths per million.  THis was apparent in teh visualizations where you could see a relationship between the rates of cases and deaths which rose at similar rates.  THe model with its low P values confirms this.  It confirms the intutitve assumption that as cases rise, so do deaths and in a proportionate manner, but most important is the coefficent.  THe lower the coefficent, the better the survivability to the virus. 
+
+
+```{r}
+model_2 <- lm(deaths_per_mil ~ Province_State, data = Provincial_Summary )
+summary(model_2)
+```
+## Model Analysis
+
+Because we have exact summuaries in 9our Province the data,  we get remarkab;e results with extremely low P values.  No surprise here and very likely Prvinces have predictable data that would be more powerful if we had more data, like poulation density, travel patterns, tourist activity,  health resources and so on.  THis is a simple model and more discreet data would provide a better set of important features 
+
+Looking at the coefficients does tell a story.  The urban provinces have large positive coefficents while the rural ones have low negat9ive coefficients.  THis is consitent with the visualizations we saw.   
+
+## Conclusions
+
+The data sources are useful to undferstand the pattern of the pandfemic over time and the rate of cases to deaths.  They also reveal some differences in rural and urban case rates, especially the difference in the experience over the first 18 months of the pandemic where rural Canadians were far safer. A much richer dataset would have far more value in understanding the features that drive differences in covid activity.  
+
+##  BIAS
+
+The greatest opportunity in COVID Data Analysis will be in the collection and reporting of the data.  There are many questions about how different countries record COVID data.  What is a COVID Death.  Is there a financial incentive like funding to over report? Or a disincentive?  Politically?  In tourist areas?Why did Johns Hopkins choose not to include demographic data like age and sex?  
+
+The analyst, in this case, myself may also be subject to bias.  Why did I choose to look at urban and rural factors. Why did I pick Canada?
+
+We try to be unbiased, but bias is a characteristic that is intrinsic to the human condition.
+
+Data Sources:
+World Health Organization (WHO): https://www.who.int/
+
+European Centre for Disease Prevention and Control (ECDC): https://www.ecdc.europa.eu/en/geographical-distribution-2019-ncov-cases
+
+DXY.cn. Pneumonia. 2020. http://3g.dxy.cn/newh5/view/pneumonia
+
+US CDC: https://www.cdc.gov/coronavirus/2019-ncov/index.html
+
+BNO News: https://bnonews.com/index.php/2020/02/the-latest-coronavirus-cases/
+
+WorldoMeters: https://www.worldometers.info/coronavirus/
+
+1Point3Arces: https://coronavirus.1point3acres.com/en
+
+COVID Tracking Project: https://covidtracking.com/data.
